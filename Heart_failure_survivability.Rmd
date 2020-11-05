@@ -1,0 +1,348 @@
+---
+title: '**DA5030 Final Project**'
+author: '**Hamid Ebrahimi**'
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_float: yes
+---
+### Background
+Each year 17.8 million people lost their lives due to the Cardiovascular diseases as the number one cause of death globally, which accounts for ~32% of all deaths worldwide. Heart failure -refers to an occasion in which heart cannot pump enough blood that’s required for functionality of the body- is one of the most common events caused by Cardiovascular diseases. In this project I am trying to predict, based on several health measures, that if a patient will survive a heart failure or not.
+
+### Data set
+Data set that will be used consists of records of 299 patients with 13 features and can be found at UCI machine learning repository:
+[link to data set](http://archive.ics.uci.edu/ml/datasets/Heart+failure+clinical+records)
+
+### Data analysis
+There are no missing values in the data so I am going to create a second data set with randomly removed data (to create NAs) and impute them using different methods to compare the results with the full data set.
+Since number of instances is relatively low, I will use k-fold cross-validation to train and evaluate the models.
+The task here is a binary classification and I will use Random Forest, kNN, SVM and Logistic Regression algorithms to predict the target feature. Principal component analysis will be performed and Pearson correlation will be used to select relevant and significant features.Accuracy will be used to evaluate performance of the models.
+
+### 0. Loading libraries
+```{r, warning=FALSE, message=FALSE}
+if (!require("fastDummies")) install.packages("fastDummies")
+if (!require("ggfortify")) install.packages("ggfortify")
+if (!require("psych")) install.packages("psych")
+if (!require("caret")) install.packages("caret")
+if (!require("kernlab")) install.packages("kernlab")
+if (!require("e1071")) install.packages("e1071")
+if (!require("stats")) install.packages("stats")
+if (!require("DMwR")) install.packages("DMwR")
+if (!require("randomForest")) install.packages("randomForest")
+if (!require("ggplot")) install.packages("ggplot2")
+library(psych)
+library(caret)
+library(kernlab)
+library(e1071)
+library(fastDummies)
+library(stats)
+library(ggfortify)
+library(DMwR)
+library(randomForest)
+library(ggplot2)
+```
+
+### 1. Data acquisition
+```{r ,message=F}
+df <- read.csv("heart_failure_clinical_records_dataset.csv")
+#this data set consists of records of 299 patients with 13 features and can be found at UCI machine learning repository:
+#http://archive.ics.uci.edu/ml/datasets/Heart+failure+clinical+records
+```
+### 2. Data Exploration
+```{r}
+head(df)
+str(df)
+summary(df)
+
+#checking for missing values
+colSums(is.na(df))
+```
+
+```{r}
+#checking for outliers in the numeric columns
+#note: due to the nature of the problem and measurements, we do not have any evidence at hand that there is a possibility of mis-measurement in the data, so we are changing Whisker lines range to 3 IQR to include "mild outliers" and only identify extreme outliers.
+par(mfrow=c(2,4))
+boxplot(df[1], range=3, main="age distribution")
+boxplot(df[3], range=3, main="creatinine phosphokinase")
+boxplot(df[5], range=3, main="ejection fraction")
+boxplot(df[7], range=3, main="platelets")
+boxplot(df[8], range=3, main="creatinine serum")
+boxplot(df[9], range=3, main="sodium serum")
+boxplot(df[12], range=3, main="time before follow up visit")
+```
+
+```{r}
+#checking distribution
+par(mfrow=c(2,4))
+hist(df[,1], main="age distribution")
+hist(df[,3], main="creatinine phosphokinase")
+hist(df[,5], main="ejection fraction")
+hist(df[,7], main="platelets")
+hist(df[,8], main="creatinine serum")
+hist(df[,9], main="sodium serum")
+hist(df[,12], main="time before follow up visit")
+```
+
+
+in columns 3 and 8, we have non-normal distribution and lots of outliers (evident from boxplot).
+we transform data in the third column by log() and in 8th column by 1/x transformer to make distributions normal.
+```{r}
+if (sum(df[,3]==0)==0) {
+df[,3] <- log(df[,3])
+}
+if (sum(df[,8]==0)==0) {
+df[,8] <- 1/(df[,8])  
+}
+
+#checking for distribution and outliers of transformed columns
+plot.new()
+boxplot(df[,c(3,8)], range=3, main = "creatinine phosphokinase and serum after transformation")
+```
+
+this shows that distributions are now closer to normal and with no "extreme outliers". We only need to remove three extreme outliers in the 7th column (plateles). 
+
+```{r, tidy=TRUE, results='hold'}
+#removing three outliers in column 7
+outliers_7 <- boxplot(df[,7], range=3, plot=FALSE)$out
+df <- df[-which(df[,7] %in% outliers_7),]
+
+#transform the response feature to factor to be able to use classification algorithms
+df[,13] <- factor(df[,13])
+```
+deriving new feature
+```{r, results='hold'}
+#deriving new feature "month_followup" that indicated in how many months the follow up visit has happened. 1 = 0-30days, 2 = 30-60days etc.
+for (i in 1:nrow(df)) {
+  if (df[i,12] <= 30) {df$month_followup[i]<-1
+  } else if (df[i,12] <= 60) {df$month_followup[i]<-2
+  } else if (df[i,12] <= 90) {df$month_followup[i]<-3
+  } else if (df[i,12] <= 120) {df$month_followup[i]<-4
+  } else if (df[i,12] <= 150) {df$month_followup[i]<-5
+  } else if (df[i,12] <= 180) {df$month_followup[i]<-6
+  } else if (df[i,12] <= 210) {df$month_followup[i]<-7
+  } else if (df[i,12] <= 240) {df$month_followup[i]<-8
+  } else if (df[i,12] <= 270) {df$month_followup[i]<-9
+  } else if (df[i,12] <= 300) {df$month_followup[i]<-10
+  } else if (df[i,12] <= 330) {df$month_followup[i]<-11
+  } else if (df[i,12] <= 360) {df$month_followup[i]<-12
+  }
+}
+df <- df[-12]
+```
+
+```{r}
+#correlation analysis
+pairs.panels(df)
+```
+the top 5 features based on Pearson correlation are(in order): month_followup, serum_creatinine, ejection_fraction, age and serum_sodium. So we will remove all other features and use only these features in building our models and will compare results with full data set.
+```{r}
+df_removed <- df[,c("DEATH_EVENT", "month_followup", "serum_creatinine", "ejection_fraction", "age", "serum_sodium")]
+```
+
+### 3. Data cleaning and shaping
+####  i. data imputation
+
+Since data set does not have any missing value, we artificially replace 5% of values with NA and then impute them and compare the results of modeling on full data set and on imputed data set. I selected to put NAs in two columns: "high blood pressure" and "serum_creatinine". I am using kNN for the factor feature and linear regression for the numerical value. (note that we are doing this only for the full data set)
+```{r, tidy = TRUE, results='hold'}
+df_imputed <- df
+df_imputed$serum_creatinine[sample(1:nrow(df_imputed), 0.05*nrow(df_imputed))] <- NA
+df_imputed$high_blood_pressure[sample(1:nrow(df_imputed), 0.05*nrow(df_imputed))] <- NA
+cat("*** checking number of missing values in the imputed data frame before imputation***\n")
+colSums(is.na(df_imputed)) #so we created several missing values in these two columns.
+```
+
+```{r, results='hold'}
+#using linear regression to impute serum_creatinine missing values
+reg_mod <- lm(serum_creatinine~.-DEATH_EVENT, data = df_imputed)
+df_imputed$serum_creatinine[which(is.na(df_imputed$serum_creatinine))] <- predict(reg_mod, df_imputed[which(is.na(df_imputed$serum_creatinine)), c(1:7, 9:13)])
+#we will use knn to impute remaining missing values from package DMwR. note that we are not using response feature as predictor here.
+df_imputed <- knnImputation(df_imputed[-12], scale = T)
+df_imputed$DEATH_EVENT <- df$DEATH_EVENT
+#check to see if we successfully imputed missing values
+cat("*** checking number of missing values in the imputed data frame after imputation***\n")
+colSums(is.na(df_imputed))
+```
+  
+####  ii. Principal Component Analysis
+```{r, results='hold'}
+#Principal component analysis
+df_pca <- prcomp(df[,c(1:11,13)], center = TRUE,scale. = TRUE)
+cat("*** Summary of principal component analysis ***\n")
+summary(df_pca)
+```
+
+results show that the first five principle components explains 56% of the variation in the data. we create biplot of the first two PCs and mark each class of target feature on the plot. from this plot it can be seen that, for example, sex and smoking hasve greater loads in the first PC while age and month_followup have larger loads in the second PC.
+
+```{r, warning=F}
+#plotting first two PCA
+autoplot(df_pca, data = df, colour = 'DEATH_EVENT', loadings = TRUE, loadings.colour = 'blue',
+         loadings.label = TRUE, loadings.label.size = , loadings.label.colour="black", frame=T, frame.type="norm")
+```
+
+####  iii. Normalizing and dummy coding features
+Numerical features are normalized to [0,1]. categorical features are already have only two levels of (0,1) so there is no need to dummy code these features except for the month_followup. we use dummy_cols() from fastDummies package: to dummy code this feature.
+```{r}
+#normalizing values in the data frame
+normalize <- function(x) {
+ return((x - min(x)) / (max(x) - min(x)))
+}
+
+df[,c(1,3,5,7:9)] <- as.data.frame(lapply(df[,c(1,3,5,7:9)], normalize))
+df_imputed[,c(1,3,5,7:9)] <- as.data.frame(lapply(df_imputed[,c(1,3,5,7:9)], normalize))
+df_removed[,c(3:6)] <- as.data.frame(lapply(df_removed[,c(3:6)], normalize))
+
+#dummy coding "month_followup" column
+df <- dummy_cols(df, select_column="month_followup", remove_first_dummy = TRUE, remove_selected_columns = TRUE)
+df_imputed <- dummy_cols(df_imputed, select_column="month_followup", remove_first_dummy = TRUE, remove_selected_columns = TRUE)
+df_removed <- dummy_cols(df_removed, select_column="month_followup", remove_first_dummy = TRUE, remove_selected_columns = TRUE)
+```
+
+### 4.1. model creation and evaluation
+We are aiming to create four models to predict the Death_event column. These four models are Logistic regression, SVM, kNN, and Random Forest. we will use 10-fold cross validation since the data set is fairly small.
+train() function from caret package will be used to perform 10-fold cross validation on the data set. This will be performed on full data set and on selected features (from the previous section) and results will be compared to see if selected features yield in better accuracy.
+```{r, results='hold'}
+# train control for 10 fold cross validation 
+train_control <- trainControl(method="cv", number=10)
+
+# fitting SVM model using train() function from caret package
+svm_model_full <- train(DEATH_EVENT~., data=df, trControl=train_control, method="svmLinear") #for full data set
+svm_model <- train(DEATH_EVENT~., data=df_removed, trControl=train_control, method="svmLinear") 
+
+# Summarize Results
+cat("*** Model Summary for SVM model on full data ***\n")
+print(svm_model_full)
+cat("*** Model Summary for SVM model on selected features ***\n")
+print(svm_model)
+```
+in this case model with full data set has slightly better accuracy but due to the large number of predictors, it's prone to overfitting. 
+```{r, results='hold'}
+# fitting logistic Regression model using train() function from caret package
+lr_model_full <- train(DEATH_EVENT~., data=df, trControl=train_control, method="glm")
+lr_model <- train(DEATH_EVENT~., data=df_removed, trControl=train_control, method="glm")
+# Summarize Results
+cat("*** Model Summary for Logistic Regression model on full data ***\n")
+summary(lr_model_full)
+cat("*** Model Summary for Logistic Regression model on selected features ***\n")
+summary(lr_model)
+```
+results show that the model with selected features has lower AIC and hence higher accuracy.
+```{r, results='hold'}
+# fitting knn model using train() function from caret package
+knn_model_full <- train(DEATH_EVENT~., data=df, trControl=train_control, method="knn")
+knn_model <- train(DEATH_EVENT~., data=df_removed, trControl=train_control, method="knn")
+# Summarize Results
+cat("*** Model Summary for kNN model on full data ***\n")
+print(knn_model_full)
+cat("*** Model Summary for kNN model on selected features ***\n")
+print(knn_model)
+```
+model with selected features returns higher accuracy
+```{r, results='hold'}
+# fitting random forest model using train() function from caret package
+rf_model_full <- train(DEATH_EVENT~., data=df, trControl=train_control, method="rf")
+rf_model <- train(DEATH_EVENT~., data=df_removed, trControl=train_control, method="rf")
+# Summarize Results
+cat("*** Model Summary for Random Forest model on full data ***\n")
+print(rf_model_full)
+cat("*** Model Summary for Random Forest model on Selected features ***\n")
+print(rf_model)
+```
+again the model with selected features returns yields in accuracy. results in this section showed that we will have better models working with the selected features from the previous section
+```{r, results='hold'}
+#function to calculate 95% confidence interval
+CI <- function(x){
+  CI <- 1.96*sqrt((x*(1-x))/nrow(df))
+}
+
+#comparing models using their accuracies and 95% confidence intervals
+svm_accuracy <- max(svm_model$results[,2])
+lr_accuracy <- max(lr_model$results[,2])
+knn_accuracy <- max(knn_model$results[,2])
+rf_accuracy <- max(rf_model$results[,2])
+```
+
+```{r, results='hold'}
+cat("*** comparing accuracy from different models: ***\n")
+cat("Model: \t\t SVM \t \t Logistic Regression \t kNN \t \tRandom Forest\n")
+cat("Accuracy: \t", round(svm_accuracy,3), "\t\t\t", round(lr_accuracy,3), "\t\t\t\t",round(knn_accuracy,3), "\t\t",round(rf_accuracy,3))
+cat("\n95% CI: \t\t+/-", round(CI(svm_accuracy),3), "\t\t+/-", round(CI(lr_accuracy),3), "\t\t\t+/-", round(CI(knn_accuracy),3), "\t+/-", round(CI(rf_accuracy),3))
+
+model_acc <- data.frame(
+  m_names=c("SVM", "Logistic Regression", "kNN", "Random Forest"),
+  model_accuracies=100*c(round(svm_accuracy,3), round(lr_accuracy,3), round(knn_accuracy,3), round(rf_accuracy,3)),
+  error=100*c(round(CI(svm_accuracy),3), round(CI(lr_accuracy),3), round(CI(knn_accuracy),3), round(CI(rf_accuracy),3))
+)
+ggplot(model_acc) +
+  geom_bar( aes(x=m_names, y=model_accuracies), stat="identity", fill="lightblue", width = 0.7) +
+  geom_errorbar( aes(x=m_names, ymin=model_accuracies-error, ymax=model_accuracies+error), width=0.2, colour="black", alpha=0.9, size=1) + labs(title = "Model accuracies comparison", x = "Models", y = "Accuracy") + scale_y_continuous(limit = c(0, 100))
+
+```
+Confidence intervals shows the probability of correct classification with 95% confidence. for example in the case of SVM model, we can say with 95% confidence that the model will predict correct class in at least 83.5-4.2=79.3% cases.
+
+### 4.2. Tuning the models
+```{r, results='hold'}
+#for SVM model we change the kernel to radial basis and polynomial to see if we get better results
+svm_model_rbf <- train(DEATH_EVENT~., data=df_removed, trControl=train_control, method="svmRadial") 
+svm_model_poly <- train(DEATH_EVENT~., data=df_removed, trControl=train_control, method="svmPoly") 
+print(svm_model_rbf)
+print(svm_model_poly)
+```
+
+```{r, results='hold'}
+#comparing with Linear kernel
+svm_rbf_accuracy <- max(svm_model_rbf$results[,3])
+svm_poly_accuracy <- max(svm_model_poly$results[,4])
+cat("*** comparing accuracy of different kernels: ***\n")
+cat("Kernel: \t Linear \t Radial \t Polynomial\n")
+cat("Accuracy: \t", round(svm_accuracy,3), "\t\t", round(svm_rbf_accuracy,3), "\t\t",round(svm_poly_accuracy,3))
+cat("\n95% CI: \t+/-", round(CI(svm_accuracy),3), "\t+/-", round(CI(svm_rbf_accuracy),3), "\t+/-", round(CI(svm_poly_accuracy),3))
+```
+it seems there is not much difference between using different kernels for SVM classifier (Polynomial kernel is also checked). for all models train() function from caret package automatically tune model over parameters and return the best model so no need for tuning models at this stage. 
+
+we also want to run one of the models, SVM, on the imputed data set to highlight the effect of missing data imputation on the final model. Since we have fairly small data set here, the effect can be noticeable. 
+```{r, results='hold'}
+# fitting SVM model to imputed data set using train() function from caret package
+svm_model_imputed <- train(DEATH_EVENT~., data=df_imputed, trControl=train_control, method="svmLinear")
+# Summarize Results
+cat("***Model Summary for SVM model on imputed data***\n")
+print(svm_model_imputed)
+```
+
+```{r, results='hold'}
+svm_imputed_accuracy <- max(svm_model_imputed$results[,2])
+svm_full_accuracy <- max(svm_model_full$results[,2])
+cat("***comparing accuracy of full data set with imputed data set:***\n")
+cat("data: \t\t Full \t\t Imputed\n")
+cat("Accuracy: \t", round(svm_full_accuracy,3), "\t\t", round(svm_imputed_accuracy,3))
+cat("\n95% CI: \t+/-", round(CI(svm_full_accuracy),3), "\t+/-", round(CI(svm_imputed_accuracy),3),"\n")
+```
+the imputed data sets has slightly lower accuracy as we expected.
+
+### 4.3. construction of ensemble model
+```{r, results='hold'}
+#finally we create an ensemble model containing all four models and test it on an imaginary new data point
+
+Mode <- function(x){  #mode function
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+ensemble_model <- function(x){ #this function gets the new data point, predict outcome with four models and returns simple majority vote. in case of a tie, returns prediction of SVM model (model with highest accuracy) 
+  P1 <- predict(svm_model, x)
+  P2 <- predict(lr_model, x)
+  P3 <- predict(knn_model, x)
+  P4 <- predict(rf_model, x)
+  ensemble_model <- Mode(c(numeric(P1), numeric(P2), numeric(P3), numeric(P4)))
+}
+
+#defining a random new data point
+new_data <- as.data.frame <- data.frame(runif(1), runif(1), runif(1), runif(1) ,0,0,1,0,0,0,0,0,0)
+names(new_data) <- names(df_removed)[2:14]
+cat("***Predicted class of the new data from ensemble model ***\n")
+print(ensemble_model(new_data))
+```
+
+
